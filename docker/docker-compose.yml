@@ -1,0 +1,95 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ozc-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hallaudio}
+      POSTGRES_USER: ${POSTGRES_USER:-hallaudio}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-please-change-me}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hallaudio} -d ${POSTGRES_DB:-hallaudio}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [ozc]
+
+  emqx:
+    image: emqx/emqx:5.7
+    container_name: ozc-emqx
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      EMQX_NODE_NAME: emqx@emqx
+
+      # Listeners
+      EMQX_LISTENERS__TCP__DEFAULT__BIND: "0.0.0.0:1883"
+      EMQX_LISTENERS__WS__DEFAULT__BIND: "0.0.0.0:8083"
+
+      # Dashboard
+      EMQX_DASHBOARD__DEFAULT_USERNAME: ${EMQX_DASH_USER:-admin}
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: ${EMQX_DASH_PASS:-please-change-me-strong}
+
+      # HTTP AuthN via backend
+      EMQX_AUTHENTICATION__1__MECHANISM: password_based
+      EMQX_AUTHENTICATION__1__BACKEND: http
+      EMQX_AUTHENTICATION__1__ENABLE: "true"
+      EMQX_AUTHENTICATION__1__URL: "http://backend:3000/emqx/authn"
+      EMQX_AUTHENTICATION__1__METHOD: post
+      EMQX_AUTHENTICATION__1__HEADERS__content-type: "application/json"
+
+      # HTTP AuthZ via backend
+      EMQX_AUTHORIZATION__SOURCES__1__TYPE: http
+      EMQX_AUTHORIZATION__SOURCES__1__ENABLE: "true"
+      EMQX_AUTHORIZATION__SOURCES__1__URL: "http://backend:3000/emqx/authz"
+      EMQX_AUTHORIZATION__SOURCES__1__METHOD: post
+      EMQX_AUTHORIZATION__SOURCES__1__HEADERS__content-type: "application/json"
+
+      # Optional: allow larger control messages
+      EMQX_MQTT__MAX_PACKET_SIZE: "1MB"
+    ports:
+      - "1883:1883"   # MQTT
+      - "8083:8083"   # MQTT over WS (optional)
+      - "18083:18083" # EMQX Dashboard
+    volumes:
+      - emqx_data:/opt/emqx/data
+      - emqx_log:/opt/emqx/log
+    networks: [ozc]
+
+  backend:
+    # Placeholder - replace with your built image later
+    image: ghcr.io/wienni112/openzonecontrol-backend:latest
+    container_name: ozc-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgres://${POSTGRES_USER:-hallaudio}:${POSTGRES_PASSWORD:-please-change-me}@postgres:5432/${POSTGRES_DB:-hallaudio}"
+      MQTT_HOST: emqx
+      MQTT_PORT: 1883
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
+    ports:
+      - "3000:3000"
+    networks: [ozc]
+
+  web:
+    # Placeholder - replace with your built image later
+    image: ghcr.io/wienni112/openzonecontrol-web:latest
+    container_name: ozc-web
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:3000}
+    ports:
+      - "8080:3000"
+    networks: [ozc]
+
+networks:
+  ozc:
+
+volumes:
+  pgdata:
+  emqx_data:
+  emqx_log:
